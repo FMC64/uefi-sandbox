@@ -19,3 +19,9 @@ Just a cute little repository with UEFI programs, where I experiment with stuff.
 - In the host, `setup/container/run.sh`
 - In the `edk2` container, run:
 	- `source setup/activate.sh` to have the proper build environment
+
+
+### Building an app
+
+- Run `setup/build_app.sh $APP_NAME`, with `$APP_NAME` simply the directory name of the application at the root of this repo
+	- Follow on-screen instructions
