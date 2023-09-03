@@ -5,6 +5,7 @@
 #include <Library/ShellLib.h>
 #include <Register/Intel/Cpuid.h>
 #include <Guid/Acpi.h>
+#include <Universal/Console/TerminalDxe/Terminal.h>
 
 #define efiAssert(code) { EFI_STATUS res = code; if (res != EFI_SUCCESS) { return res; } }
 
@@ -33,7 +34,7 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
 	}
 
 	UINT64 prevTsc = AsmReadTsc();
-	for (int i = 0; i < 16; i++) {
+	for (int i = 0; i < 4; i++) {
 		UINT64 curTsc = AsmReadTsc();
 		Print(L"Iteration #%d, TSC = %Lu, cycle diff = %Lu\n", i, curTsc, curTsc - prevTsc);
 		prevTsc = curTsc;
@@ -41,5 +42,23 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
 		//ShellPromptForResponse(ShellPromptResponseTypeAnyKeyContinue, NULL, NULL);
 		efiAssert(SystemTable->BootServices->Stall(1e6));
 	}
+	Print(L"Will now read ConIn indefinitely until Return is pressed. Feel free to type whatever in there:\n");
+	while (1) {
+		EFI_INPUT_KEY key = {
+			.ScanCode = 0,
+			.UnicodeChar = 0
+		};
+		EFI_STATUS status = SystemTable->ConIn->ReadKeyStroke(SystemTable->ConIn, &key);
+		if (status == EFI_SUCCESS) {
+			Print(L"Keystroke: %x, unicode %x = '%c'\n", key.ScanCode, key.UnicodeChar, key.UnicodeChar);
+			if (key.UnicodeChar == CHAR_CARRIAGE_RETURN)
+				break;
+		} else if (status != EFI_NOT_READY) {
+			Print(L"Error on ReadKeyStroke: %Ld\n", status);
+		}
+		efiAssert(SystemTable->BootServices->Stall(64));
+	}
+	Print(L"Done! Press any key to get back to setup..\n");
+	ShellPromptForResponse(ShellPromptResponseTypeAnyKeyContinue, NULL, NULL);
 	return EFI_SUCCESS;
 }
