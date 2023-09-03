@@ -23,7 +23,9 @@ build -p Platform/Intel/MinPlatformPkg/MinPlatformPkg.dsc -b RELEASE
 OUTPUT=~/mirror/$1/app/OUTPUT/$1.efi
 
 if [ ! -f $OUTPUT ]; then
-	echo "Output not found, make sure that ~/edk2-platforms/Platform/Intel/MinPlatformPkg/MinPlatformPkg.dsc contains '/home/edk2/mirror/$1/app.inf' in [Components]"
+	echo "Output not found, you need to configure the SDK:"
+	echo "- Edit ~/edk2-platforms/Platform/Intel/MinPlatformPkg/MinPlatformPkg.dec and set gMinPlatformPkgTokenSpaceGuid.PcdBootStage to 3, set gMinPlatformPkgTokenSpaceGuid.PcdBootToShellOnly to TRUE"
+	echo "- Edit ~/edk2-platforms/Platform/Intel/MinPlatformPkg/MinPlatformPkg.dsc and add '/home/edk2/mirror/$1/app.inf' in [Components]"
 	exit 1
 fi
 

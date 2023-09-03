@@ -16,16 +16,19 @@
 
 [Packages]
 	MdePkg/MdePkg.dec
-	#MdeModulePkg/MdeModulePkg.dec
+	MinPlatformPkg/MinPlatformPkg.dec
+	UefiCpuPkg/UefiCpuPkg.dec
+	MdeModulePkg/MdeModulePkg.dec
 	ShellPkg/ShellPkg.dec
   
 [LibraryClasses]
 	UefiApplicationEntryPoint
 	UefiLib
-	#TimerLib
+	BaseMemoryLib
 	ShellLib
-  
+
 [Guids]
+	gEfiAcpiTableGuid	# CONSUMES
 
 [Ppis]
 
@@ -34,3 +37,4 @@
 [FeaturePcd]
 
 [Pcd]
+	gUefiCpuPkgTokenSpaceGuid.PcdCpuCoreCrystalClockFrequency	# CONSUMES
