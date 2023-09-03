@@ -55,6 +55,7 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
 				break;
 		} else if (status != EFI_NOT_READY) {
 			Print(L"Error on ReadKeyStroke: %Ld\n", status);
+			break;
 		}
 		efiAssert(SystemTable->BootServices->Stall(64));
 	}
