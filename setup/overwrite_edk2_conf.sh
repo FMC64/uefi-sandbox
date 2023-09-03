@@ -1,5 +1,8 @@
 #/bin/bash -e
 
+# You usually do not need to call this script yourself
+# activate.sh does it automatically
+
 cat > /home/edk2/edk2/Conf/target.txt <<END
 #
 #  Copyright (c) 2006 - 2019, Intel Corporation. All rights reserved.<BR>
@@ -28,7 +31,7 @@ ACTIVE_PLATFORM       = EmulatorPkg/EmulatorPkg.dsc
 #                                               valid targets specified in the platform description file
 #                                               will attempt to be built. The following line will build
 #                                               DEBUG platform target.
-TARGET                = DEBUG
+TARGET                = RELEASE
 
 #  TARGET_ARCH           List       Optional    What kind of architecture is the binary being target for.
 #                                               One, or more, of the following, IA32, IPF, X64, EBC, ARM

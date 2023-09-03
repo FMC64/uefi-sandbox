@@ -22,5 +22,7 @@ cd ~/edk2
 
 stuart_setup -c .pytool/CISettings.py
 stuart_update -c .pytool/CISettings.py
-$DIR/overwrite_edk2_conf.sh
-stuart_ci_build -c .pytool/CISettings.py TOOL_CHAIN_TAG=GCC5 -a X64 -p EmulatorPkg
+
+#source $DIR/activate.sh
+
+#stuart_ci_build -c .pytool/CISettings.py TOOL_CHAIN_TAG=GCC5 -a X64 -p EmulatorPkg

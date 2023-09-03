@@ -16,10 +16,14 @@
 
 [Packages]
 	MdePkg/MdePkg.dec
+	#MdeModulePkg/MdeModulePkg.dec
+	ShellPkg/ShellPkg.dec
   
 [LibraryClasses]
 	UefiApplicationEntryPoint
 	UefiLib
+	#TimerLib
+	ShellLib
   
 [Guids]
 
