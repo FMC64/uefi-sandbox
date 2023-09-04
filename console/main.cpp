@@ -48,7 +48,7 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
 		efiAssert(SystemTable->BootServices->Stall(1e6));
 	}
 	Print(uToC16(u"Will now read ConIn indefinitely until Return is pressed. Feel free to type whatever in there:\n"));
-	while (1) {
+	while (true) {
 		EFI_INPUT_KEY key{};
 		auto status = SystemTable->ConIn->ReadKeyStroke(SystemTable->ConIn, &key);
 		if (status == EFI_SUCCESS) {
