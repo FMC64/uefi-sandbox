@@ -148,6 +148,8 @@ class Tetris
 	}
 
 	bool m_gameOver;
+	UINTN m_score;
+	UINTN m_completedLineTicks;
 
 	UINTN m_currentPiece;
 	UINTN m_currentPiecePosition;
@@ -168,6 +170,16 @@ class Tetris
 		return res;
 	}
 
+	void resetGame(void) {
+		m_gameOver = false;
+		m_score = 0;
+		m_completedLineTicks = 0;
+		m_currentPieceLastTickRot = 0;
+		resetField();
+		for (UINTN i = 0; i < 2; i++)
+			genNextPiece();
+	}
+
 	void resetPieceTransient(void) {
 		m_currentPieceFall = 0;
 		m_currentPieceFastFall = 0;
@@ -183,28 +195,62 @@ class Tetris
 		m_nextPiece = random() % pieceCount;
 
 		if (isPieceIntersectingField(m_currentPiece, m_currentPiecePosition, m_currentPieceX, m_currentPieceY)) {
-			m_currentPieceX = -32;
+			m_currentPieceX = -64;
 			m_gameOver = true;
 		}
 	}
 
 	static inline constexpr UINTN framerate = 60;
 
-	UINTN getFallingSpeed(UINTN tick) const {
+	UINTN getDifficulty(UINTN tick) const {
 		if (tick < framerate * 10)
+			return 0;
+		else if (tick < framerate * 20)
+			return 1;
+		else if (tick < framerate * 40)
+			return 2;
+		else if (tick < framerate * 60)
+			return 3;
+		else if (tick < framerate * 60 * 3)
+			return 4;
+		else if (tick < framerate * 60 * 5)
+			return 5;
+		else
+			return 6;
+	}
+
+	UINTN getFallingSpeed(UINTN difficulty) const {
+		if (difficulty == 0)
 			return 50;
-		if (tick < framerate * 20)
+		else if (difficulty == 1)
 			return 40;
-		if (tick < framerate * 40)
+		else if (difficulty == 2)
 			return 30;
-		if (tick < framerate * 60)
+		else if (difficulty == 3)
 			return 20;
-		if (tick < framerate * 60 * 3)
+		else if (difficulty == 4)
 			return 10;
-		if (tick < framerate * 60 * 5)
+		else if (difficulty == 5)
 			return 5;
 		else
 			return 4;
+	}
+
+	UINTN getScorePerLine(UINTN difficulty) const {
+		if (difficulty == 0)
+			return 100;
+		else if (difficulty == 1)
+			return 250;
+		else if (difficulty == 2)
+			return 500;
+		else if (difficulty == 3)
+			return 1000;
+		else if (difficulty == 4)
+			return 2500;
+		else if (difficulty == 5)
+			return 5000;
+		else
+			return 10000;
 	}
 
 	bool isPieceIntersectingField(UINTN pieceIndex, UINTN piecePosition, INTN pieceX, INTN pieceY) const {
@@ -226,7 +272,7 @@ class Tetris
 		return false;
 	}
 
-	void moveBy(bool forced, INTN rot, INTN x, INTN y) {
+	bool moveBy(bool forced, INTN rot, INTN x, INTN y) {
 		auto &currentPiece = m_pieces[m_currentPiece];
 
 		INTN nextPosition = m_currentPiecePosition + rot;
@@ -239,7 +285,7 @@ class Tetris
 
 		if (isPieceIntersectingField(m_currentPiece, m_currentPiecePosition, nextX, nextY)) {
 			if (!forced)
-				return;
+				return false;
 
 			auto currentPieceDisplay = currentPiece.getDisplay();
 			for (UINTN i = 0; i < Piece::height; i++)
@@ -250,10 +296,53 @@ class Tetris
 					}
 				}
 			genNextPiece();
+			return false;
 		} else {
 			m_currentPiecePosition = nextPosition;
 			m_currentPieceX = nextX;
 			m_currentPieceY = nextY;
+		}
+		return true;
+	}
+
+	static inline constexpr UINTN completedLineIterationCount = 6;
+	static inline constexpr UINTN completedLineIterationLength = framerate / 3;
+
+	bool isLineCompleted(UINTN y) const {
+		for (UINTN i = 0; i < fieldWidth; i++) {
+			if (m_field[y][i] == u'\0')
+				return false;
+		}
+		return true;
+	}
+
+	bool hasAnyCompletedLine(void) const {
+		for (UINTN i = 0; i < fieldHeight; i++) {
+			if (isLineCompleted(i))
+				return true;
+		}
+		return false;
+	}
+
+	UINTN getCompletelineIteration(void) const {
+		return m_completedLineTicks / completedLineIterationLength;
+	}
+
+	void deleteLine(UINTN y) {
+		for (UINTN i = y; i > 0; i--)
+			for (UINTN j = 0; j < fieldWidth; j++) {
+				m_field[i][j] = m_field[i - 1][j];
+			}
+		for (UINTN i = 0; i < fieldWidth; i++)
+			m_field[0][i] = u'\0';
+	}
+
+	void flushCompletedLines(UINTN difficulty) {
+		for (UINTN i = 0; i < fieldHeight; i++) {
+			if (isLineCompleted(i)) {
+				m_score += getScorePerLine(difficulty);
+				deleteLine(i);
+			}
 		}
 	}
 
@@ -261,15 +350,27 @@ class Tetris
 		if (m_gameOver)
 			return;
 
+		auto difficulty = getDifficulty(tick);
+
+		if (hasAnyCompletedLine()) {
+			if (getCompletelineIteration() < completedLineIterationCount) {
+				m_completedLineTicks++;
+			} else {
+				flushCompletedLines(difficulty);
+				m_completedLineTicks = 0;
+			}
+			return;
+		}
+
 		if (y == 0)
 			m_currentPieceFall++;
-		if (m_currentPieceFall >= getFallingSpeed(tick)) {
-			moveBy(true, 0, 0, 1);
+		if (m_currentPieceFall >= getFallingSpeed(difficulty)) {
 			m_currentPieceFall = 0;
+			moveBy(true, 0, 0, 1);
 		}
 
 		// We can't scan the keys at any time, just get the key strokes so this doesn't work.
-		/*static constexpr UINTN moveSpeed = 20;
+		/*static constexpr UINTN moveSpeed = framerate / 3;
 
 		if (x != 0)
 			m_currentPieceMove++;
@@ -307,35 +408,44 @@ class Tetris
 
 	void drawField(void) {
 
-		for (UINTN i = 0; i < fieldHeight; i++)
-			for (UINTN j = 0; j < fieldWidth; j++) {
-				if (m_field[i][j] != u'\0')
-					drawFieldDot(m_field[i][j], j, i);
-			}
-
-		auto &currentPiece = m_pieces[m_currentPiece];
-		auto currentPieceDisplay = currentPiece.getDisplay();
-		for (UINTN i = 0; i < Piece::height; i++)
-			for (UINTN j = 0; j < Piece::width; j++) {
-				if (currentPiece.at(m_currentPiecePosition, j, i)) {
-					drawFieldDot(currentPieceDisplay, m_currentPieceX + static_cast<INTN>(j), m_currentPieceY + static_cast<INTN>(i));
+		// Matrix, static elements
+		{
+			bool isCompletingBlank = getCompletelineIteration() & 1;
+			for (UINTN i = 0; i < fieldHeight; i++) {
+				auto isComplete = isLineCompleted(i);
+				for (UINTN j = 0; j < fieldWidth; j++) {
+					if (m_field[i][j] != u'\0') {
+						auto display = m_field[i][j];
+						if (isComplete)
+							display = isCompletingBlank ? ' ' : '-';
+						drawFieldDot(display, j, i);
+					}
 				}
 			}
+		}
+
+		// Current piece
+		{
+			auto &currentPiece = m_pieces[m_currentPiece];
+			auto currentPieceDisplay = currentPiece.getDisplay();
+			for (UINTN i = 0; i < Piece::height; i++)
+				for (UINTN j = 0; j < Piece::width; j++) {
+					if (currentPiece.at(m_currentPiecePosition, j, i)) {
+						drawFieldDot(currentPieceDisplay, m_currentPieceX + static_cast<INTN>(j), m_currentPieceY + static_cast<INTN>(i));
+					}
+				}
+		}
 	}
 
 public:
 	inline Tetris(EFI_SIMPLE_TEXT_INPUT_PROTOCOL *input, EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *output);
 
 	void run(void) {
-		resetField();
-		for (UINTN i = 0; i < 2; i++)
-			genNextPiece();
+		resetGame();
+		UINTN currentTick = 0;
+
 		resetFramebuffer();
 		m_output.clear();
-
-		m_gameOver = false;
-		m_currentPieceLastTickRot = 0;
-		UINTN currentTick = 0;
 
 		bool isDone = false;
 		while (!isDone) {
@@ -366,6 +476,14 @@ public:
 			for (UINTN i = 0; i < framebufferHeight; i++) {
 				m_output.locate(0, i);
 				m_output.print(m_framebuffer[i]);
+			}
+
+			m_output.locate(13, 8);
+			m_output.print(uToC16(u"Score: %08u"), m_score);
+
+			if (m_gameOver) {
+				m_output.locate(16, 8);
+				m_output.print(uToC16(u"[GAME OVER!]"));
 			}
 
 			sleep(1e6 / framerate);
