@@ -130,6 +130,10 @@ class Tetris
 			return m_display;
 		}
 
+		UINTN getPositionCount(void) const {
+			return m_positionCount;
+		}
+
 		bool at(UINTN position, UINTN x, UINTN y) const {
 			return m_positions[position][y][x];
 		}
@@ -143,11 +147,16 @@ class Tetris
 		SetMem16(m_field, sizeof(m_field), u'\0');
 	}
 
+	bool m_gameOver;
+
 	UINTN m_currentPiece;
 	UINTN m_currentPiecePosition;
 	INTN m_currentPieceX;
 	INTN m_currentPieceY;
 	UINTN m_currentPieceFall;
+	UINTN m_currentPieceFastFall;
+	UINTN m_currentPieceMove;
+	INTN m_currentPieceLastTickRot;
 	UINTN m_nextPiece;
 
 	UINTN m_lastRandom = 0xBAADBEEF;
@@ -159,13 +168,24 @@ class Tetris
 		return res;
 	}
 
+	void resetPieceTransient(void) {
+		m_currentPieceFall = 0;
+		m_currentPieceFastFall = 0;
+		m_currentPieceMove = 0;
+	}
+
 	void genNextPiece(void) {
 		m_currentPiece = m_nextPiece;
 		m_currentPiecePosition = 0;
 		m_currentPieceX = 3;
 		m_currentPieceY = 0;
-		m_currentPieceFall = 0;
+		resetPieceTransient();
 		m_nextPiece = random() % pieceCount;
+
+		if (isPieceIntersectingField(m_currentPiece, m_currentPiecePosition, m_currentPieceX, m_currentPieceY)) {
+			m_currentPieceX = -32;
+			m_gameOver = true;
+		}
 	}
 
 	static inline constexpr UINTN framerate = 60;
@@ -206,11 +226,21 @@ class Tetris
 		return false;
 	}
 
-	void moveBy(INTN x, INTN y) {
+	void moveBy(bool forced, INTN rot, INTN x, INTN y) {
+		auto &currentPiece = m_pieces[m_currentPiece];
+
+		INTN nextPosition = m_currentPiecePosition + rot;
+		if (nextPosition < 0)
+			nextPosition = static_cast<INTN>(currentPiece.getPositionCount() - 1);
+		if (nextPosition >= static_cast<INTN>(currentPiece.getPositionCount()))
+			nextPosition = 0;
 		INTN nextX = m_currentPieceX + x;
 		INTN nextY = m_currentPieceY + y;
+
 		if (isPieceIntersectingField(m_currentPiece, m_currentPiecePosition, nextX, nextY)) {
-			auto &currentPiece = m_pieces[m_currentPiece];
+			if (!forced)
+				return;
+
 			auto currentPieceDisplay = currentPiece.getDisplay();
 			for (UINTN i = 0; i < Piece::height; i++)
 				for (UINTN j = 0; j < Piece::width; j++) {
@@ -221,17 +251,49 @@ class Tetris
 				}
 			genNextPiece();
 		} else {
+			m_currentPiecePosition = nextPosition;
 			m_currentPieceX = nextX;
 			m_currentPieceY = nextY;
 		}
 	}
 
-	void processTick(UINTN tick) {
-		m_currentPieceFall++;
+	void processTick(UINTN tick, INTN x, INTN y, INTN rot) {
+		if (m_gameOver)
+			return;
+
+		if (y == 0)
+			m_currentPieceFall++;
 		if (m_currentPieceFall >= getFallingSpeed(tick)) {
-			moveBy(0, 1);
+			moveBy(true, 0, 0, 1);
 			m_currentPieceFall = 0;
 		}
+
+		// We can't scan the keys at any time, just get the key strokes so this doesn't work.
+		/*static constexpr UINTN moveSpeed = 20;
+
+		if (x != 0)
+			m_currentPieceMove++;
+		else
+			m_currentPieceMove = 0;
+		if (m_currentPieceMove > moveSpeed) {
+			moveBy(false, 0, x, 0);
+			m_currentPieceMove = 0;
+		}
+
+		if (y != 0)
+			m_currentPieceFastFall++;
+		else
+			m_currentPieceFastFall = 0;
+		if (m_currentPieceFastFall > moveSpeed) {
+			moveBy(false, 0, 0, y);
+			m_currentPieceFastFall = 0;
+		}
+
+		if (rot != m_currentPieceLastTickRot)
+			moveBy(false, rot, 0, 0);
+		m_currentPieceLastTickRot = rot;*/
+
+		moveBy(false, rot, x, y);
 	}
 
 	void drawFieldDot(CHAR16 dot, INTN x, INTN y) {
@@ -271,19 +333,32 @@ public:
 		resetFramebuffer();
 		m_output.clear();
 
+		m_gameOver = false;
+		m_currentPieceLastTickRot = 0;
 		UINTN currentTick = 0;
 
 		bool isDone = false;
 		while (!isDone) {
 			UINTN keyCount = 0;
+			INTN x = 0, y = 0, rot = 0;
 			while (auto key = m_input.readKey()) {
 				keyCount++;
 				if (key->ScanCode == SCAN_ESC) {
 					isDone = true;
 				}
+				if (key->ScanCode == SCAN_LEFT)
+					x--;
+				if (key->ScanCode == SCAN_RIGHT)
+					x++;
+				if (key->ScanCode == SCAN_DOWN)
+					y++;
+				if (key->UnicodeChar == u'z' || key->UnicodeChar == u'Z')
+					rot--;
+				if (key->UnicodeChar == u'x' || key->UnicodeChar == u'X')
+					rot++;
 			}
 
-			processTick(currentTick);
+			processTick(currentTick, x, y, rot);
 
 			resetFramebuffer();
 			drawField();
