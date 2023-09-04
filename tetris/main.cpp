@@ -5,9 +5,10 @@ extern "C" {
 #include <Library/UefiLib.h>
 #include <Library/BaseMemoryLib.h>
 #include <Library/ShellLib.h>
+#include <Library/PrintLib.h>
 #include <Register/Intel/Cpuid.h>
 #include <Guid/Acpi.h>
-#include <Universal/Console/TerminalDxe/Terminal.h>
+#include <Library/UefiBootServicesTableLib.h>
 
 }
 
@@ -164,7 +165,7 @@ class Tetris
 	UINTN m_lastRandom = 0xBAADBEEF;
 	// To not use as a face value, always modulate this in some manner
 	UINTN random(void) {
-		auto cur = AsmReadTsc();
+		auto cur = AsmReadTsc() >> 7;
 		auto res = cur ^ m_lastRandom;
 		m_lastRandom = res;
 		return res;
@@ -197,7 +198,10 @@ class Tetris
 		if (isPieceIntersectingField(m_currentPiece, m_currentPiecePosition, m_currentPieceX, m_currentPieceY)) {
 			m_currentPieceX = -64;
 			m_gameOver = true;
+			drawGameOver();
 		}
+
+		drawNext();
 	}
 
 	static inline constexpr UINTN framerate = 60;
@@ -272,7 +276,7 @@ class Tetris
 		return false;
 	}
 
-	bool moveBy(bool forced, INTN rot, INTN x, INTN y) {
+	bool moveBy(INTN rot, INTN x, INTN y) {
 		auto &currentPiece = m_pieces[m_currentPiece];
 
 		INTN nextPosition = m_currentPiecePosition + rot;
@@ -283,26 +287,26 @@ class Tetris
 		INTN nextX = m_currentPieceX + x;
 		INTN nextY = m_currentPieceY + y;
 
-		if (isPieceIntersectingField(m_currentPiece, m_currentPiecePosition, nextX, nextY)) {
-			if (!forced)
-				return false;
-
-			auto currentPieceDisplay = currentPiece.getDisplay();
-			for (UINTN i = 0; i < Piece::height; i++)
-				for (UINTN j = 0; j < Piece::width; j++) {
-					if (currentPiece.at(m_currentPiecePosition, j, i)) {
-						// Every dot of the piece is guaranteed to be within the field, so no boundary checking
-						m_field[m_currentPieceY + static_cast<INTN>(i)][m_currentPieceX + static_cast<INTN>(j)] = currentPieceDisplay;
-					}
-				}
-			genNextPiece();
+		if (isPieceIntersectingField(m_currentPiece, nextPosition, nextX, nextY)) {
 			return false;
 		} else {
 			m_currentPiecePosition = nextPosition;
 			m_currentPieceX = nextX;
 			m_currentPieceY = nextY;
+			return true;
 		}
-		return true;
+	}
+
+	void emplaceCurrentPiece(void) {
+		auto &currentPiece = m_pieces[m_currentPiece];
+		auto currentPieceDisplay = currentPiece.getDisplay();
+		for (UINTN i = 0; i < Piece::height; i++)
+			for (UINTN j = 0; j < Piece::width; j++) {
+				if (currentPiece.at(m_currentPiecePosition, j, i)) {
+					// Every dot of the piece is guaranteed to be within the field, so no boundary checking
+					m_field[m_currentPieceY + static_cast<INTN>(i)][m_currentPieceX + static_cast<INTN>(j)] = currentPieceDisplay;
+				}
+			}
 	}
 
 	static inline constexpr UINTN completedLineIterationCount = 6;
@@ -316,12 +320,17 @@ class Tetris
 		return true;
 	}
 
-	bool hasAnyCompletedLine(void) const {
+	UINTN getCompletedLineCount(void) const {
+		UINTN res = 0;
 		for (UINTN i = 0; i < fieldHeight; i++) {
 			if (isLineCompleted(i))
-				return true;
+				res++;
 		}
-		return false;
+		return res;
+	}
+
+	bool hasAnyCompletedLine(void) const {
+		return getCompletedLineCount() > 0;
 	}
 
 	UINTN getCompletelineIteration(void) const {
@@ -366,35 +375,16 @@ class Tetris
 			m_currentPieceFall++;
 		if (m_currentPieceFall >= getFallingSpeed(difficulty)) {
 			m_currentPieceFall = 0;
-			moveBy(true, 0, 0, 1);
+			if (!moveBy(0, 0, 1)) {
+				emplaceCurrentPiece();
+				genNextPiece();
+			}
 		}
-
-		// We can't scan the keys at any time, just get the key strokes so this doesn't work.
-		/*static constexpr UINTN moveSpeed = framerate / 3;
-
-		if (x != 0)
-			m_currentPieceMove++;
-		else
-			m_currentPieceMove = 0;
-		if (m_currentPieceMove > moveSpeed) {
-			moveBy(false, 0, x, 0);
-			m_currentPieceMove = 0;
+		auto didPlayMoveSucceed = moveBy(rot, x, y);
+		if (didPlayMoveSucceed && y != 0) {
+			// Prevent quick gravity fall if player wants to move faster
+			m_currentPieceFall = 0;
 		}
-
-		if (y != 0)
-			m_currentPieceFastFall++;
-		else
-			m_currentPieceFastFall = 0;
-		if (m_currentPieceFastFall > moveSpeed) {
-			moveBy(false, 0, 0, y);
-			m_currentPieceFastFall = 0;
-		}
-
-		if (rot != m_currentPieceLastTickRot)
-			moveBy(false, rot, 0, 0);
-		m_currentPieceLastTickRot = rot;*/
-
-		moveBy(false, rot, x, y);
 	}
 
 	void drawFieldDot(CHAR16 dot, INTN x, INTN y) {
@@ -437,6 +427,44 @@ class Tetris
 		}
 	}
 
+	void blit(UINTN x, UINTN y, const CHAR16 *str) {
+		for (UINTN i = 0; x + i < (framebufferWidth - 1) && str[i] != u'\0'; i++)
+			m_framebuffer[y][x + i] = str[i];
+	}
+
+	void drawNext(void) {
+		CHAR16 pieceFramebuffer[Piece::height][Piece::width + 1];
+
+		SetMem16(pieceFramebuffer, sizeof(pieceFramebuffer), u' ');
+		for (UINTN i = 0; i < Piece::height; i++)
+			pieceFramebuffer[i][Piece::width] = u'\0';
+
+		auto &currentPiece = m_pieces[m_nextPiece];
+		auto currentPieceDisplay = currentPiece.getDisplay();
+		for (UINTN i = 0; i < Piece::height; i++)
+			for (UINTN j = 0; j < Piece::width; j++) {
+				if (currentPiece.at(0, j, i))
+					pieceFramebuffer[i][j] = currentPieceDisplay;
+			}
+
+		blit(14, 2, uToC16(u"NEXT:"));
+		for (UINTN i = 0; i < Piece::height; i++) {
+			blit(15, 4 + i, pieceFramebuffer[i]);
+		}
+	}
+
+	void drawScore(void) {
+		CHAR16 buffer[128];
+		UnicodeSPrint(buffer, sizeof(buffer), uToC16(u"Score: %08u"), m_score);
+		blit(14, 10, buffer);
+	}
+
+	void drawGameOver(void) {
+		if (m_gameOver) {
+			blit(15, 14, uToC16(u"[GAME OVER!]"));
+		}
+	}
+
 public:
 	inline Tetris(EFI_SIMPLE_TEXT_INPUT_PROTOCOL *input, EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *output);
 
@@ -472,18 +500,13 @@ public:
 
 			resetFramebuffer();
 			drawField();
+			drawNext();
+			drawScore();
+			drawGameOver();
 
 			for (UINTN i = 0; i < framebufferHeight; i++) {
 				m_output.locate(0, i);
 				m_output.print(m_framebuffer[i]);
-			}
-
-			m_output.locate(13, 8);
-			m_output.print(uToC16(u"Score: %08u"), m_score);
-
-			if (m_gameOver) {
-				m_output.locate(16, 8);
-				m_output.print(uToC16(u"[GAME OVER!]"));
 			}
 
 			sleep(1e6 / framerate);
