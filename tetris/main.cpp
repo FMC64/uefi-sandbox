@@ -488,13 +488,14 @@ public:
 		resetFramebuffer();
 		m_output.clear();
 		auto tscFreq = getTscFrequency();
-		auto lastTsc = AsmReadTsc();
 		UINTN avgFrametime = 0;
 		UINTN frametimeAcc = 0;
 		UINTN frametimeCount = 0;
 
 		bool isDone = false;
 		while (!isDone) {
+			auto beginTsc = AsmReadTsc();
+
 			UINTN keyCount = 0;
 			INTN x = 0, y = 0, rot = 0;
 			while (auto key = m_input.readKey()) {
@@ -528,22 +529,21 @@ public:
 				m_output.print(m_framebuffer[i]);
 			}
 
-			auto curTsc = AsmReadTsc();
-			auto tscDelta = curTsc - lastTsc;
-			lastTsc = curTsc;
+			auto endTsc = AsmReadTsc();
+			auto tscDelta = endTsc - beginTsc;
 
 			INTN microsecondsDelta = static_cast<UINTN>(1e6) * tscDelta / tscFreq;
 			frametimeAcc += microsecondsDelta;
 			frametimeCount++;
 
-			static constexpr UINTN frametimePeriod = framerate;
+			static constexpr UINTN frametimePeriod = framerate / 4;
 			if (frametimeCount > frametimePeriod) {
 				avgFrametime = frametimeAcc / frametimeCount;
 				frametimeAcc = 0;
 				frametimeCount = 0;
 			}
 
-			INTN toSleep = static_cast<UINTN>(1e6) / framerate - microsecondsDelta;
+			INTN toSleep = static_cast<UINTN>(1e6) / framerate - avgFrametime;
 			if (toSleep > 0)
 				sleep(toSleep);
 			currentTick++;
