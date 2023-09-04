@@ -207,17 +207,17 @@ class Tetris
 	static inline constexpr UINTN framerate = 60;
 
 	UINTN getDifficulty(UINTN tick) const {
-		if (tick < framerate * 10)
+		if (tick < framerate * 60)
 			return 0;
-		else if (tick < framerate * 20)
-			return 1;
-		else if (tick < framerate * 40)
-			return 2;
-		else if (tick < framerate * 60)
-			return 3;
 		else if (tick < framerate * 60 * 3)
-			return 4;
+			return 1;
 		else if (tick < framerate * 60 * 5)
+			return 2;
+		else if (tick < framerate * 60 * 10)
+			return 3;
+		else if (tick < framerate * 60 * 20)
+			return 4;
+		else if (tick < framerate * 60 * 45)
 			return 5;
 		else
 			return 6;
