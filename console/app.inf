@@ -12,7 +12,7 @@
 #
 
 [Sources]
-	main.c
+	main.cpp
 
 [Packages]
 	MdePkg/MdePkg.dec

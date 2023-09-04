@@ -1,3 +1,5 @@
+extern "C" {
+
 #include <Uefi.h>
 #include <Library/UefiApplicationEntryPoint.h>
 #include <Library/UefiLib.h>
@@ -7,7 +9,10 @@
 #include <Guid/Acpi.h>
 #include <Universal/Console/TerminalDxe/Terminal.h>
 
+}
+
 #define efiAssert(code) { EFI_STATUS res = code; if (res != EFI_SUCCESS) { return res; } }
+#define uToC16(uStr) reinterpret_cast<const CHAR16*>(uStr)
 
 /**
 	as the real entry point for the application.
@@ -22,44 +27,41 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
 {
 	efiAssert(ShellInitialize());
 
-	Print(L"Hello!!!\n");
+	Print(uToC16(u"Hello!!!\n"));
 
 	for (UINTN i = 0; i < SystemTable->NumberOfTableEntries; i++) {
-		GUID curGuid = SystemTable->ConfigurationTable[i].VendorGuid;
-		Print(L"#%Lu: %x %x %x (%x %x %x %x %x %x %x %x)\n", i, curGuid.Data1, curGuid.Data2, curGuid.Data3,
+		auto curGuid = SystemTable->ConfigurationTable[i].VendorGuid;
+		Print(uToC16(u"#%Lu: %x %x %x (%x %x %x %x %x %x %x %x)\n"), i, curGuid.Data1, curGuid.Data2, curGuid.Data3,
 			curGuid.Data4[0], curGuid.Data4[1], curGuid.Data4[2], curGuid.Data4[3], curGuid.Data4[4], curGuid.Data4[5], curGuid.Data4[6], curGuid.Data4[7]);
 		if (CompareMem(&curGuid, &gEfiAcpiTableGuid, sizeof(GUID)) == 0) {
-			Print(L"Found the ACPI table\n");
+			Print(uToC16(u"Found the ACPI table\n"));
 		}
 	}
 
-	UINT64 prevTsc = AsmReadTsc();
-	for (int i = 0; i < 4; i++) {
-		UINT64 curTsc = AsmReadTsc();
-		Print(L"Iteration #%d, TSC = %Lu, cycle diff = %Lu\n", i, curTsc, curTsc - prevTsc);
+	auto prevTsc = AsmReadTsc();
+	for (UINTN i = 0; i < 4; i++) {
+		auto curTsc = AsmReadTsc();
+		Print(uToC16(u"Iteration #%u, TSC = %Lu, cycle diff = %Lu\n"), i, curTsc, curTsc - prevTsc);
 		prevTsc = curTsc;
 
-		//ShellPromptForResponse(ShellPromptResponseTypeAnyKeyContinue, NULL, NULL);
+		//ShellPromptForResponse(ShellPromptResponseTypeAnyKeyContinue, nullptr, nullptr);
 		efiAssert(SystemTable->BootServices->Stall(1e6));
 	}
-	Print(L"Will now read ConIn indefinitely until Return is pressed. Feel free to type whatever in there:\n");
+	Print(uToC16(u"Will now read ConIn indefinitely until Return is pressed. Feel free to type whatever in there:\n"));
 	while (1) {
-		EFI_INPUT_KEY key = {
-			.ScanCode = 0,
-			.UnicodeChar = 0
-		};
-		EFI_STATUS status = SystemTable->ConIn->ReadKeyStroke(SystemTable->ConIn, &key);
+		EFI_INPUT_KEY key{};
+		auto status = SystemTable->ConIn->ReadKeyStroke(SystemTable->ConIn, &key);
 		if (status == EFI_SUCCESS) {
-			Print(L"Keystroke: %x, unicode %x = '%c'\n", key.ScanCode, key.UnicodeChar, key.UnicodeChar);
+			Print(uToC16(u"Keystroke: %x, unicode %x = '%c'\n"), key.ScanCode, key.UnicodeChar, key.UnicodeChar);
 			if (key.UnicodeChar == CHAR_CARRIAGE_RETURN)
 				break;
 		} else if (status != EFI_NOT_READY) {
-			Print(L"Error on ReadKeyStroke: %Ld\n", status);
+			Print(uToC16(u"Error on ReadKeyStroke: %Ld\n"), status);
 			break;
 		}
 		efiAssert(SystemTable->BootServices->Stall(64));
 	}
-	Print(L"Done! Press any key to get back to setup..\n");
-	ShellPromptForResponse(ShellPromptResponseTypeAnyKeyContinue, NULL, NULL);
+	Print(uToC16(u"Done! Press any key to get back to setup..\n"));
+	ShellPromptForResponse(ShellPromptResponseTypeAnyKeyContinue, nullptr, nullptr);
 	return EFI_SUCCESS;
 }
