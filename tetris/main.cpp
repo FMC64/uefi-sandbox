@@ -465,6 +465,19 @@ class Tetris
 		}
 	}
 
+	void drawStats(UINTN frametime) {
+		CHAR16 buffer[128];
+		UnicodeSPrint(buffer, sizeof(buffer), uToC16(u"Frametime: %Lu / %Lu (nom) us"), frametime, static_cast<UINTN>(1e6) / framerate);
+		blit(14, 0, buffer);
+	}
+
+	UINTN getTscFrequency(void) {
+		auto begin = AsmReadTsc();
+		sleep(static_cast<UINTN>(1e6));
+		auto end = AsmReadTsc();
+		return end - begin;
+	}
+
 public:
 	inline Tetris(EFI_SIMPLE_TEXT_INPUT_PROTOCOL *input, EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *output);
 
@@ -474,6 +487,11 @@ public:
 
 		resetFramebuffer();
 		m_output.clear();
+		auto tscFreq = getTscFrequency();
+		auto lastTsc = AsmReadTsc();
+		UINTN avgFrametime = 0;
+		UINTN frametimeAcc = 0;
+		UINTN frametimeCount = 0;
 
 		bool isDone = false;
 		while (!isDone) {
@@ -503,13 +521,31 @@ public:
 			drawNext();
 			drawScore();
 			drawGameOver();
+			drawStats(avgFrametime);
 
 			for (UINTN i = 0; i < framebufferHeight; i++) {
 				m_output.locate(0, i);
 				m_output.print(m_framebuffer[i]);
 			}
 
-			sleep(1e6 / framerate);
+			auto curTsc = AsmReadTsc();
+			auto tscDelta = curTsc - lastTsc;
+			lastTsc = curTsc;
+
+			INTN microsecondsDelta = static_cast<UINTN>(1e6) * tscDelta / tscFreq;
+			frametimeAcc += microsecondsDelta;
+			frametimeCount++;
+
+			static constexpr UINTN frametimePeriod = framerate;
+			if (frametimeCount > frametimePeriod) {
+				avgFrametime = frametimeAcc / frametimeCount;
+				frametimeAcc = 0;
+				frametimeCount = 0;
+			}
+
+			INTN toSleep = static_cast<UINTN>(1e6) / framerate - microsecondsDelta;
+			if (toSleep > 0)
+				sleep(toSleep);
 			currentTick++;
 		}
 	}
