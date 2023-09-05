@@ -1,0 +1,40 @@
+[Defines]
+	INF_VERSION                    = 1.25
+	BASE_NAME                      = userland
+	FILE_GUID                      = 50fd8042-96e8-48f5-b36a-09cc63ee1195
+	MODULE_TYPE                    = UEFI_APPLICATION
+	VERSION_STRING                 = 1.0
+	ENTRY_POINT                    = UefiMain
+#
+# The following information is for reference only and not required by the build tools.
+#
+#  VALID_ARCHITECTURES           = IA32 X64 IPF EBC Etc...
+#
+
+[Sources]
+	main.cpp
+
+[Packages]
+	MdePkg/MdePkg.dec
+	MinPlatformPkg/MinPlatformPkg.dec
+	UefiCpuPkg/UefiCpuPkg.dec
+	MdeModulePkg/MdeModulePkg.dec
+	ShellPkg/ShellPkg.dec
+  
+[LibraryClasses]
+	UefiApplicationEntryPoint
+	UefiLib
+	BaseMemoryLib
+	ShellLib
+
+[Guids]
+	gEfiAcpiTableGuid	# CONSUMES
+
+[Ppis]
+
+[Protocols]
+
+[FeaturePcd]
+
+[Pcd]
+	gUefiCpuPkgTokenSpaceGuid.PcdCpuCoreCrystalClockFrequency	# CONSUMES
