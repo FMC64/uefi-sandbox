@@ -23,7 +23,14 @@ extern "C" {
 	}
 }
 
+[[maybe_unused]] [[noreturn]] static void runtimeFatalError(void) {
+	while (true) {
+		CpuPause();
+	}
+}
+
 #define bootEfiAssert(code) { auto bootEfiAssert__res = code; if (bootEfiAssert__res != EFI_SUCCESS) { bootFatalError(uToC16(u"bootEfiAssert"), bootEfiAssert__res); } }
+#define runtimeEfiAssert(code) { auto runtimeEfiAssert__res = code; if (runtimeEfiAssert__res != EFI_SUCCESS) { runtimeFatalError(); } }
 
 [[maybe_unused]] static void bootPrintControlRegisters(void) {
 		static constexpr UINT32 msrEferAddr = 0xC0000080;
@@ -39,7 +46,9 @@ extern "C" {
 [[maybe_unused]] static UINTN bootGetMemoryMapKey(void) {
 	UINTN memoryMapSize = 0, mapKey, descriptorSize;
 	UINT32 descriptorVersion;
-	bootEfiAssert(gBS->GetMemoryMap(&memoryMapSize, nullptr, &mapKey, &descriptorSize, &descriptorVersion));
+	auto res = gBS->GetMemoryMap(&memoryMapSize, nullptr, &mapKey, &descriptorSize, &descriptorVersion);
+	if (res != EFI_BUFFER_TOO_SMALL)
+		bootEfiAssert(res);
 	return mapKey;
 }
 
@@ -97,24 +106,51 @@ static EFI_MEMORY_DESCRIPTOR bootFindConventionalMemory(void) {
 	}
 }
 
-[[maybe_unused]] static void bootPrintMemoryTypeDescriptors(EFI_MEMORY_TYPE memoryType, UINTN minPageCount) {
+[[maybe_unused]] static void bootPrintMemoryTypeDescriptors(EFI_MEMORY_TYPE memoryTypeBegin, EFI_MEMORY_TYPE memoryTypeEnd, UINTN minPageCount) {
 	UINTN smallPageCount = 0;
 
 	UINTN i = 0;
-	Print(uToC16(u"Enumerating memory descriptors of type 0x%Lx:\n"), static_cast<UINTN>(memoryType));
-	bootIterateMemoryMap([&i, memoryType, minPageCount, &smallPageCount](const EFI_MEMORY_DESCRIPTOR &curDescriptor) {
-		if (curDescriptor.Type != memoryType)
+	Print(uToC16(u"Enumerating memory descriptors from type 0x%Lx to 0x%Lx (non inclusive):\n"), static_cast<UINTN>(memoryTypeBegin), static_cast<UINTN>(memoryTypeEnd));
+	bootIterateMemoryMap([&i, memoryTypeBegin, memoryTypeEnd, minPageCount, &smallPageCount](const EFI_MEMORY_DESCRIPTOR &curDescriptor) {
+		if (!(curDescriptor.Type >= memoryTypeBegin && curDescriptor.Type < memoryTypeEnd))
 			return;
 		if (curDescriptor.NumberOfPages < minPageCount) {
 			smallPageCount++;
 			return;
 		}
 
-		Print(uToC16(u"#%Ld at 0x%Lx: %,Ld bytes (0x%Lx pages), attr = 0x%Lx\n"), i, curDescriptor.PhysicalStart, curDescriptor.NumberOfPages * static_cast<UINTN>(1 << 12), curDescriptor.NumberOfPages, curDescriptor.Attribute);
+		Print(uToC16(u"#%Ld at [0x%Lx, 0x%Lx): %,Ld bytes (0x%Lx pages), attr = 0x%Lx\n"), i,
+			curDescriptor.PhysicalStart, curDescriptor.PhysicalStart + curDescriptor.NumberOfPages * static_cast<UINTN>(1 << 12),
+			curDescriptor.NumberOfPages * static_cast<UINTN>(1 << 12), curDescriptor.NumberOfPages, curDescriptor.Attribute
+		);
 		i++;
+
+		if (i % 20 == 0) {
+			Print(uToC16(u"Press any key to display next page..\n"));
+			ShellPromptForResponse(ShellPromptResponseTypeAnyKeyContinue, nullptr, nullptr);
+		}
 	});
 	if (minPageCount > 0)
 		Print(uToC16(u"0x%Lx memory descriptors of less than 0x%Lx pages were omitted\n"), smallPageCount, minPageCount);
+}
+
+[[maybe_unused]] static UINTN bootEstimateTscFrequency(void) {
+	auto begin = AsmReadTsc();
+	bootEfiAssert(gBS->Stall(static_cast<UINTN>(1e6)));
+	auto end = AsmReadTsc();
+	return end - begin;
+}
+
+[[maybe_unused]] static void runtimeSleep(UINTN tscFrequency, UINTN microseconds) {
+	auto begin = AsmReadTsc();
+
+	auto tscFullSleepDelay = microseconds * tscFrequency / 1e6;
+
+	while (true) {
+		auto cur = AsmReadTsc();
+		if (cur - begin > tscFullSleepDelay)
+			break;
+	}
 }
 
 /**
@@ -130,6 +166,7 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
 {
 	bootEfiAssert(ShellInitialize());
 
+	bootPrintControlRegisters();
 	auto conventionalMemory = bootFindConventionalMemory();
 	Print(uToC16(u"Conventional memory found at 0x%Lx: %,Ld bytes, attributes = 0x%Lx\n"),
 		conventionalMemory.PhysicalStart, conventionalMemory.NumberOfPages * static_cast<UINTN>(1 << 12), conventionalMemory.Attribute
@@ -140,10 +177,19 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
 	Print(uToC16(u"Press any key to show conventional memory descriptors..\n"));
 	ShellPromptForResponse(ShellPromptResponseTypeAnyKeyContinue, nullptr, nullptr);
 	// Pruning less than 1MiB descriptors
-	bootPrintMemoryTypeDescriptors(EfiConventionalMemory, 0xFF);
+	//bootPrintMemoryTypeDescriptors(EfiConventionalMemory, static_cast<EFI_MEMORY_TYPE>(EfiConventionalMemory + 1), 0xFF);
 
-	Print(uToC16(u"Done! Press any key to get back to setup..\n"));
+	bootPrintMemoryTypeDescriptors(static_cast<EFI_MEMORY_TYPE>(0), EfiMaxMemoryType, 0x04);
+
+	Print(uToC16(u"Done! Press any key to shut down your machine in 5 seconds..\n"));
 	ShellPromptForResponse(ShellPromptResponseTypeAnyKeyContinue, nullptr, nullptr);
+
+	auto tscFreq = bootEstimateTscFrequency();
+
+	bootEfiAssert(SystemTable->BootServices->ExitBootServices(ImageHandle, bootGetMemoryMapKey()));
+
+	runtimeSleep(tscFreq, static_cast<UINTN>(5e6));
+	SystemTable->RuntimeServices->ResetSystem(EfiResetShutdown, EFI_SUCCESS, 0, nullptr);
 
 	return EFI_SUCCESS;
 }
