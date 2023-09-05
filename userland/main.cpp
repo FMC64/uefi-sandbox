@@ -16,16 +16,16 @@ extern "C" {
 
 #define uToC16(uStr) reinterpret_cast<const CHAR16*>(uStr)
 
-[[noreturn]] static void fatalError(const CHAR16 *domain, UINT64 code) {
+[[noreturn]] static void bootFatalError(const CHAR16 *domain, UINT64 code) {
 	Print(uToC16(u"FATAL ERROR: %s: code 0x%x\nRestart your machine."), domain, code);
 	while (true) {
 		CpuPause();
 	}
 }
 
-#define efiAssert(code) { auto res = code; if (res != EFI_SUCCESS) { fatalError(uToC16(u"efiAssert"), res); } }
+#define bootEfiAssert(code) { auto bootEfiAssert__res = code; if (bootEfiAssert__res != EFI_SUCCESS) { bootFatalError(uToC16(u"bootEfiAssert"), bootEfiAssert__res); } }
 
-[[maybe_unused]] static void displayControlRegisters(void) {
+[[maybe_unused]] static void bootPrintControlRegisters(void) {
 		static constexpr UINT32 msrEferAddr = 0xC0000080;
 
 		auto cr0 = AsmReadCr0();
@@ -39,7 +39,7 @@ extern "C" {
 [[maybe_unused]] static UINTN bootGetMemoryMapKey(void) {
 	UINTN memoryMapSize = 0, mapKey, descriptorSize;
 	UINT32 descriptorVersion;
-	gBS->GetMemoryMap(&memoryMapSize, nullptr, &mapKey, &descriptorSize, &descriptorVersion);
+	bootEfiAssert(gBS->GetMemoryMap(&memoryMapSize, nullptr, &mapKey, &descriptorSize, &descriptorVersion));
 	return mapKey;
 }
 
@@ -48,14 +48,18 @@ template <typename Fn>
 static UINTN bootIterateMemoryMap(Fn &&fn) {
 	UINTN memoryMapSize = 0, mapKey, descriptorSize;
 	UINT32 descriptorVersion;
-	gBS->GetMemoryMap(&memoryMapSize, nullptr, &mapKey, &descriptorSize, &descriptorVersion);
+	{
+		auto res = gBS->GetMemoryMap(&memoryMapSize, nullptr, &mapKey, &descriptorSize, &descriptorVersion);
+		if (res != EFI_BUFFER_TOO_SMALL)
+			bootEfiAssert(res);
+	}
 	//Print(uToC16(u"Memory map size: 0x%Lx bytes, mapKey = 0x%Lx, descriptorSize = 0x%Lx, descriptorVersion = 0x%Lx\n"), memoryMapSize, mapKey, descriptorSize, descriptorVersion);
 
 	if (descriptorVersion != EFI_MEMORY_DESCRIPTOR_VERSION)
-		fatalError(uToC16(u"GetMemoryMap.descriptorVersion was expected to be EFI_MEMORY_DESCRIPTOR_VERSION"), descriptorVersion);
+		bootFatalError(uToC16(u"GetMemoryMap.descriptorVersion was expected to be EFI_MEMORY_DESCRIPTOR_VERSION"), descriptorVersion);
 
 	UINT8 memoryMapBytes[memoryMapSize];
-	gBS->GetMemoryMap(&memoryMapSize, reinterpret_cast<EFI_MEMORY_DESCRIPTOR*>(memoryMapBytes), &mapKey, &descriptorSize, &descriptorVersion);
+	bootEfiAssert(gBS->GetMemoryMap(&memoryMapSize, reinterpret_cast<EFI_MEMORY_DESCRIPTOR*>(memoryMapBytes), &mapKey, &descriptorSize, &descriptorVersion));
 
 	UINTN descriptorCount = memoryMapSize / descriptorSize;
 	for (UINTN i = 0; i < descriptorCount; i++) {
@@ -76,7 +80,7 @@ static EFI_MEMORY_DESCRIPTOR bootFindConventionalMemory(void) {
 			res = curDescriptor;
 	});
 	if (!res)
-		fatalError(uToC16(u"findConventionalMemory: no mapping found of type EfiConventionalMemory (code is memory descriptor count)"), descriptorCount);
+		bootFatalError(uToC16(u"findConventionalMemory: no mapping found of type EfiConventionalMemory (code is memory descriptor count)"), descriptorCount);
 	return *res;
 }
 
@@ -124,7 +128,7 @@ static EFI_MEMORY_DESCRIPTOR bootFindConventionalMemory(void) {
 **/
 EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
 {
-	efiAssert(ShellInitialize());
+	bootEfiAssert(ShellInitialize());
 
 	auto conventionalMemory = bootFindConventionalMemory();
 	Print(uToC16(u"Conventional memory found at 0x%Lx: %,Ld bytes, attributes = 0x%Lx\n"),
