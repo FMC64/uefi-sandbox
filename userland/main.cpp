@@ -8,6 +8,7 @@ extern "C" {
 #include <Library/PrintLib.h>
 #include <Register/Intel/Cpuid.h>
 #include <Guid/Acpi.h>
+#include <Protocol/GraphicsOutput.h>
 #include <Library/UefiBootServicesTableLib.h>
 
 }
@@ -153,6 +154,59 @@ static EFI_MEMORY_DESCRIPTOR bootFindConventionalMemory(void) {
 	}
 }
 
+[[maybe_unused]] static void bootPrintGuid(const GUID &guid) {
+	Print(uToC16(u"%x %x %x (%x %x %x %x %x %x %x %x)\n"), guid.Data1, guid.Data2, guid.Data3,
+		guid.Data4[0], guid.Data4[1], guid.Data4[2], guid.Data4[3], guid.Data4[4], guid.Data4[5], guid.Data4[6], guid.Data4[7]
+	);
+}
+
+// Fn is a `bool (EFI_HANDLE handle)`
+// When fn returns false, the iterator aborts
+template <typename Fn>
+static void bootIterateHandles(EFI_LOCATE_SEARCH_TYPE searchType, EFI_GUID *protocol, VOID *searchKey, Fn &&fn) {
+	UINTN bufferSize = 0;
+	{
+		auto res = gBS->LocateHandle(searchType, protocol, searchKey, &bufferSize, nullptr);
+		if (res != EFI_BUFFER_TOO_SMALL)
+			bootEfiAssert(res);
+	}
+	UINT8 buffer[bufferSize];
+	bootEfiAssert(gBS->LocateHandle(searchType, protocol, searchKey, &bufferSize, reinterpret_cast<EFI_HANDLE*>(buffer)));
+
+	UINTN handleCount = bufferSize / sizeof(EFI_HANDLE);
+	for (UINTN i = 0; i < handleCount; i++) {
+		auto currentHandle = *reinterpret_cast<const EFI_HANDLE*>(buffer + i * sizeof(EFI_HANDLE));
+		if (!fn(currentHandle))
+			break;
+	}
+}
+
+class GraphicsOutputProtocol
+{
+	EFI_GRAPHICS_OUTPUT_PROTOCOL *m_graphicsOutputProtocol;
+
+public:
+	GraphicsOutputProtocol(EFI_GRAPHICS_OUTPUT_PROTOCOL *graphicsOutputProtocol) :
+		m_graphicsOutputProtocol(graphicsOutputProtocol)
+	{
+	}
+
+	// Fn is a `void (UINT32 modeNumber, const EFI_GRAPHICS_OUTPUT_MODE_INFORMATION &modeInfo)`
+	template <typename Fn>
+	void iterateModes(Fn &&fn) const {
+		for (UINT32 i = 0; i < m_graphicsOutputProtocol->Mode->MaxMode; i++) {
+			UINTN sizeofInfo;
+			EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info;
+			bootEfiAssert(m_graphicsOutputProtocol->QueryMode(m_graphicsOutputProtocol, i, &sizeofInfo, &info));
+			fn(i, *info);
+		}
+	}
+
+	void setMode(UINT32 modeNumber) const {
+		bootEfiAssert(m_graphicsOutputProtocol->SetMode(m_graphicsOutputProtocol, modeNumber));
+	}
+};
+
 /**
 	as the real entry point for the application.
 
@@ -174,21 +228,125 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
 
 	bootPrintMemoryTotals();
 
-	Print(uToC16(u"Press any key to show conventional memory descriptors..\n"));
-	ShellPromptForResponse(ShellPromptResponseTypeAnyKeyContinue, nullptr, nullptr);
+	//Print(uToC16(u"Press any key to show conventional memory descriptors..\n"));
+	//ShellPromptForResponse(ShellPromptResponseTypeAnyKeyContinue, nullptr, nullptr);
 	// Pruning less than 1MiB descriptors
 	//bootPrintMemoryTypeDescriptors(EfiConventionalMemory, static_cast<EFI_MEMORY_TYPE>(EfiConventionalMemory + 1), 0xFF);
 
-	bootPrintMemoryTypeDescriptors(static_cast<EFI_MEMORY_TYPE>(0), EfiMaxMemoryType, 0x04);
-
-	Print(uToC16(u"Done! Press any key to shut down your machine in 5 seconds..\n"));
-	ShellPromptForResponse(ShellPromptResponseTypeAnyKeyContinue, nullptr, nullptr);
+	//bootPrintMemoryTypeDescriptors(static_cast<EFI_MEMORY_TYPE>(0), EfiMaxMemoryType, 0x04);
 
 	auto tscFreq = bootEstimateTscFrequency();
 
+	Print(uToC16(u"Press any key to move ahead with graphical setup..\n"));
+	ShellPromptForResponse(ShellPromptResponseTypeAnyKeyContinue, nullptr, nullptr);
+
+	EFI_GRAPHICS_OUTPUT_MODE_INFORMATION graphicsModeInfo;
+	EFI_PHYSICAL_ADDRESS framebuffer;
+	{
+		EFI_GRAPHICS_OUTPUT_PROTOCOL *graphicsOutputProtocolPtr = nullptr;
+
+		{
+			bootPrintGuid(gEfiGraphicsOutputProtocolGuid);
+			bootIterateHandles(ByProtocol, &gEfiGraphicsOutputProtocolGuid, nullptr, [&graphicsOutputProtocolPtr, ImageHandle](EFI_HANDLE handle) {
+				Print(uToC16(u"gEfiGraphicsOutputProtocolGuid handle %p\n"), handle);
+				bootEfiAssert(
+						gBS->OpenProtocol(
+						handle, &gEfiGraphicsOutputProtocolGuid, reinterpret_cast<void**>(&graphicsOutputProtocolPtr),
+						ImageHandle, 0, EFI_OPEN_PROTOCOL_GET_PROTOCOL
+					)
+				);
+				return true;
+			});
+			if (graphicsOutputProtocolPtr == nullptr)
+				bootFatalError(uToC16(u"gEfiGraphicsOutputProtocolGuid is not supported"), EFI_UNSUPPORTED);
+		}
+
+		Print(uToC16(u"Graphics output protocol = %p\n"), graphicsOutputProtocolPtr);
+
+		auto graphicsOutputProtocol = GraphicsOutputProtocol(graphicsOutputProtocolPtr);
+		struct Best {
+			UINT32 modeNumber;
+			EFI_GRAPHICS_OUTPUT_MODE_INFORMATION modeInfo;
+		};
+
+		std::optional<Best> best;
+		graphicsOutputProtocol.iterateModes([&best](UINT32 modeNumber, const EFI_GRAPHICS_OUTPUT_MODE_INFORMATION &modeInfo) {
+			/*Print(uToC16(u"Mode #%u: width = %u, height = %u, format = 0x%x, pixelsPerScanline = %u, rMask = %x, gMask = %x, bMask = %u\n"), modeNumber,
+				modeInfo.HorizontalResolution, modeInfo.VerticalResolution, modeInfo.PixelFormat, modeInfo.PixelsPerScanLine,
+				modeInfo.PixelInformation.RedMask, modeInfo.PixelInformation.GreenMask, modeInfo.PixelInformation.BlueMask
+			);*/
+			if (!(modeInfo.PixelFormat == PixelRedGreenBlueReserved8BitPerColor || modeInfo.PixelFormat == PixelBlueGreenRedReserved8BitPerColor))
+				return;
+
+			if (!best || modeInfo.HorizontalResolution * modeInfo.VerticalResolution > best->modeInfo.HorizontalResolution * best->modeInfo.VerticalResolution) {
+				best = Best {
+					.modeNumber = modeNumber,
+					.modeInfo = modeInfo
+				};
+			}
+		});
+		if (!best)
+			bootFatalError(uToC16(u"graphicsOutputProtocol: no compatible mode found (code is the number of modes available)"), graphicsOutputProtocolPtr->Mode->MaxMode);
+		graphicsOutputProtocol.setMode(best->modeNumber);
+		graphicsModeInfo = *graphicsOutputProtocolPtr->Mode->Info;
+		framebuffer = graphicsOutputProtocolPtr->Mode->FrameBufferBase;
+	}
+
+	Print(uToC16(u"Done! Press any key to test out runtime rendering, then shut down your machine in 15 seconds..\n"));
+	ShellPromptForResponse(ShellPromptResponseTypeAnyKeyContinue, nullptr, nullptr);
+
 	bootEfiAssert(SystemTable->BootServices->ExitBootServices(ImageHandle, bootGetMemoryMapKey()));
 
-	runtimeSleep(tscFreq, static_cast<UINTN>(5e6));
+	for (UINTN it = 0; it < 30 * 15; it++) {
+
+		union Pixel {
+			struct {
+				UINT8 r, g, b;
+			} comps;
+			struct {
+				UINT8 values[3];
+			} vector;
+		};
+
+		auto getPixel = [](UINTN it, UINTN x, UINTN y) -> Pixel {
+			return (((x + it) / 8) ^ ((y + it * 3) / 16)) & 1 ?
+				Pixel{
+					.comps{
+						.r = 0xFF,
+						.g = static_cast<UINT8>((x + it) & 0xFF),
+						.b = 0xFF
+					}
+				} : Pixel{
+					.comps{
+						.r = 0x80,
+						.g = static_cast<UINT8>(0x80 + (y + it * 3) / 64),
+						.b = 0xFF
+					}
+				};
+		};
+
+		if (graphicsModeInfo.PixelFormat == PixelRedGreenBlueReserved8BitPerColor) {
+			for (UINTN i = 0; i < graphicsModeInfo.VerticalResolution; i++) {
+				auto scanline = reinterpret_cast<UINT8*>(framebuffer) + i * graphicsModeInfo.PixelsPerScanLine * 4;
+				for (UINTN j = 0; j < graphicsModeInfo.HorizontalResolution; j++) {
+					auto pixel = getPixel(it, j, i);
+					for (UINTN k = 0; k < 3; k++)
+						scanline[j * 4 + k] = pixel.vector.values[k];
+				}
+			}
+		} else {
+			for (UINTN i = 0; i < graphicsModeInfo.VerticalResolution; i++) {
+				auto scanline = reinterpret_cast<UINT8*>(framebuffer) + i * graphicsModeInfo.PixelsPerScanLine * 4;
+				for (UINTN j = 0; j < graphicsModeInfo.HorizontalResolution; j++) {
+					auto pixel = getPixel(it, j, i);
+					for (UINTN k = 0; k < 3; k++)
+						scanline[j * 4 + k] = pixel.vector.values[3 - 1 - k];
+				}
+			}
+		}
+
+		runtimeSleep(tscFreq, static_cast<UINTN>(1e6 / 30));
+	}
 	SystemTable->RuntimeServices->ResetSystem(EfiResetShutdown, EFI_SUCCESS, 0, nullptr);
 
 	return EFI_SUCCESS;

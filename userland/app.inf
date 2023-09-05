@@ -33,6 +33,8 @@
 [Ppis]
 
 [Protocols]
+	gEfiGraphicsOutputProtocolGuid	# CONSUMES
+	gEfiSimpleTextOutProtocolGuid	# CONSUMES
 
 [FeaturePcd]
 
