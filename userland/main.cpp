@@ -241,7 +241,7 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
 	ShellPromptForResponse(ShellPromptResponseTypeAnyKeyContinue, nullptr, nullptr);
 
 	EFI_GRAPHICS_OUTPUT_MODE_INFORMATION graphicsModeInfo;
-	EFI_PHYSICAL_ADDRESS framebuffer;
+	EFI_PHYSICAL_ADDRESS gpuFramebuffer;
 	{
 		EFI_GRAPHICS_OUTPUT_PROTOCOL *graphicsOutputProtocolPtr = nullptr;
 
@@ -289,7 +289,7 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
 			bootFatalError(uToC16(u"graphicsOutputProtocol: no compatible mode found (code is the number of modes available)"), graphicsOutputProtocolPtr->Mode->MaxMode);
 		graphicsOutputProtocol.setMode(best->modeNumber);
 		graphicsModeInfo = *graphicsOutputProtocolPtr->Mode->Info;
-		framebuffer = graphicsOutputProtocolPtr->Mode->FrameBufferBase;
+		gpuFramebuffer = graphicsOutputProtocolPtr->Mode->FrameBufferBase;
 	}
 
 	Print(uToC16(u"Done! Press any key to test out runtime rendering, then shut down your machine in 15 seconds..\n"));
@@ -297,7 +297,8 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
 
 	bootEfiAssert(SystemTable->BootServices->ExitBootServices(ImageHandle, bootGetMemoryMapKey()));
 
-	for (UINTN it = 0; it < 30 * 15; it++) {
+	auto framebuffer = reinterpret_cast<UINT8*>(conventionalMemory.PhysicalStart);
+	for (UINTN it = 0; it < 60 * 15; it++) {
 
 		union Pixel {
 			struct {
@@ -344,8 +345,9 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
 				}
 			}
 		}
+		CopyMem(reinterpret_cast<void*>(gpuFramebuffer), framebuffer, graphicsModeInfo.PixelsPerScanLine * 4 * graphicsModeInfo.VerticalResolution);
 
-		runtimeSleep(tscFreq, static_cast<UINTN>(1e6 / 30));
+		runtimeSleep(tscFreq, static_cast<UINTN>(1e6 / 60));
 	}
 	SystemTable->RuntimeServices->ResetSystem(EfiResetShutdown, EFI_SUCCESS, 0, nullptr);
 
