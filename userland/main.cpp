@@ -93,16 +93,24 @@ static EFI_MEMORY_DESCRIPTOR bootFindConventionalMemory(void) {
 	}
 }
 
-[[maybe_unused]] static void bootPrintMemoryTypeDescriptors(EFI_MEMORY_TYPE memoryType) {
+[[maybe_unused]] static void bootPrintMemoryTypeDescriptors(EFI_MEMORY_TYPE memoryType, UINTN minPageCount) {
+	UINTN smallPageCount = 0;
+
 	UINTN i = 0;
 	Print(uToC16(u"Enumerating memory descriptors of type 0x%Lx:\n"), static_cast<UINTN>(memoryType));
-	bootIterateMemoryMap([&i, memoryType](const EFI_MEMORY_DESCRIPTOR &curDescriptor) {
+	bootIterateMemoryMap([&i, memoryType, minPageCount, &smallPageCount](const EFI_MEMORY_DESCRIPTOR &curDescriptor) {
 		if (curDescriptor.Type != memoryType)
 			return;
+		if (curDescriptor.NumberOfPages < minPageCount) {
+			smallPageCount++;
+			return;
+		}
 
 		Print(uToC16(u"#%Ld at 0x%Lx: %,Ld bytes (0x%Lx pages), attr = 0x%Lx\n"), i, curDescriptor.PhysicalStart, curDescriptor.NumberOfPages * static_cast<UINTN>(1 << 12), curDescriptor.NumberOfPages, curDescriptor.Attribute);
 		i++;
 	});
+	if (minPageCount > 0)
+		Print(uToC16(u"0x%Lx memory descriptors of less than 0x%Lx pages were omitted\n"), smallPageCount, minPageCount);
 }
 
 /**
@@ -127,7 +135,8 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
 
 	Print(uToC16(u"Press any key to show conventional memory descriptors..\n"));
 	ShellPromptForResponse(ShellPromptResponseTypeAnyKeyContinue, nullptr, nullptr);
-	bootPrintMemoryTypeDescriptors(EfiConventionalMemory);
+	// Pruning less than 1MiB descriptors
+	bootPrintMemoryTypeDescriptors(EfiConventionalMemory, 0xFF);
 
 	Print(uToC16(u"Done! Press any key to get back to setup..\n"));
 	ShellPromptForResponse(ShellPromptResponseTypeAnyKeyContinue, nullptr, nullptr);
