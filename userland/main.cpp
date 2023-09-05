@@ -36,6 +36,13 @@ extern "C" {
 		Print(uToC16(u"CR0 = 0x%Lx, CR2 = 0x%Lx, CR3 = 0x%Lx, CR4 = 0x%Lx, EFER = 0x%Lx\n"), cr0, cr2, cr3, cr4, efer);
 }
 
+[[maybe_unused]] static UINTN bootGetMemoryMapKey(void) {
+	UINTN memoryMapSize = 0, mapKey, descriptorSize;
+	UINT32 descriptorVersion;
+	gBS->GetMemoryMap(&memoryMapSize, nullptr, &mapKey, &descriptorSize, &descriptorVersion);
+	return mapKey;
+}
+
 // Fn is a `void (const EFI_MEMORY_DESCRIPTOR &currentMemoryDescriptor)`
 template <typename Fn>
 static UINTN bootIterateMemoryMap(Fn &&fn) {
@@ -51,31 +58,51 @@ static UINTN bootIterateMemoryMap(Fn &&fn) {
 	gBS->GetMemoryMap(&memoryMapSize, reinterpret_cast<EFI_MEMORY_DESCRIPTOR*>(memoryMapBytes), &mapKey, &descriptorSize, &descriptorVersion);
 
 	UINTN descriptorCount = memoryMapSize / descriptorSize;
-	//Print(uToC16(u"Enumerating memory map, 0x%Lx descriptors:\n"), descriptorCount);
 	for (UINTN i = 0; i < descriptorCount; i++) {
 		auto &curDescriptor = *reinterpret_cast<const EFI_MEMORY_DESCRIPTOR*>(memoryMapBytes + i * descriptorSize);
-		/*Print(uToC16(u"#0x%Lx: type = 0x%x, physicalStart = 0x%Lx, virtualStart = 0x%Lx, pageCount = 0x%Lx, attributes = 0x%Lx\n"), i,
-			curDescriptor.Type, curDescriptor.PhysicalStart, curDescriptor.VirtualStart, curDescriptor.NumberOfPages, curDescriptor.Attribute
-		);
-		ShellPromptForResponse(ShellPromptResponseTypeAnyKeyContinue, nullptr, nullptr);*/
-
 		fn(curDescriptor);
 	}
 	return descriptorCount;
 }
 
-static EFI_MEMORY_DESCRIPTOR findConventionalMemory(void) {
+static EFI_MEMORY_DESCRIPTOR bootFindConventionalMemory(void) {
 	std::optional<EFI_MEMORY_DESCRIPTOR> res;
 
 	auto descriptorCount = bootIterateMemoryMap([&res](const EFI_MEMORY_DESCRIPTOR &curDescriptor) {
 		if (curDescriptor.Type != EfiConventionalMemory)
 			return;
+
 		if (!res || curDescriptor.NumberOfPages > res->NumberOfPages)
 			res = curDescriptor;
 	});
 	if (!res)
 		fatalError(uToC16(u"findConventionalMemory: no mapping found of type EfiConventionalMemory (code is memory descriptor count)"), descriptorCount);
 	return *res;
+}
+
+[[maybe_unused]] static void bootPrintMemoryTotals(void) {
+	UINTN totalPages[EfiMaxMemoryType] {};
+
+	auto descriptorCount = bootIterateMemoryMap([&totalPages](const EFI_MEMORY_DESCRIPTOR &curDescriptor) {
+		totalPages[curDescriptor.Type] += curDescriptor.NumberOfPages;
+	});
+
+	Print(uToC16(u"Enumerating memory type totals, 0x%Lx descriptors:\n"), descriptorCount);
+	for (UINTN i = 0; i < EfiMaxMemoryType; i++) {
+		Print(uToC16(u"Type 0x%Lx: %,Ld bytes (0x%Lx pages)\n"), i, totalPages[i] * static_cast<UINTN>(1 << 12), totalPages[i]);
+	}
+}
+
+[[maybe_unused]] static void bootPrintMemoryTypeDescriptors(EFI_MEMORY_TYPE memoryType) {
+	UINTN i = 0;
+	Print(uToC16(u"Enumerating memory descriptors of type 0x%Lx:\n"), static_cast<UINTN>(memoryType));
+	bootIterateMemoryMap([&i, memoryType](const EFI_MEMORY_DESCRIPTOR &curDescriptor) {
+		if (curDescriptor.Type != memoryType)
+			return;
+
+		Print(uToC16(u"#%Ld at 0x%Lx: %,Ld bytes (0x%Lx pages), attr = 0x%Lx\n"), i, curDescriptor.PhysicalStart, curDescriptor.NumberOfPages * static_cast<UINTN>(1 << 12), curDescriptor.NumberOfPages, curDescriptor.Attribute);
+		i++;
+	});
 }
 
 /**
@@ -91,10 +118,16 @@ EFI_STATUS EFIAPI UefiMain(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *Syste
 {
 	efiAssert(ShellInitialize());
 
-	auto conventionalMemory = findConventionalMemory();
-	Print(uToC16(u"Conventional memory found at 0x%Lx: %Lu bytes, attributes = 0x%Lx\n"),
+	auto conventionalMemory = bootFindConventionalMemory();
+	Print(uToC16(u"Conventional memory found at 0x%Lx: %,Ld bytes, attributes = 0x%Lx\n"),
 		conventionalMemory.PhysicalStart, conventionalMemory.NumberOfPages * static_cast<UINTN>(1 << 12), conventionalMemory.Attribute
 	);
+
+	bootPrintMemoryTotals();
+
+	Print(uToC16(u"Press any key to show conventional memory descriptors..\n"));
+	ShellPromptForResponse(ShellPromptResponseTypeAnyKeyContinue, nullptr, nullptr);
+	bootPrintMemoryTypeDescriptors(EfiConventionalMemory);
 
 	Print(uToC16(u"Done! Press any key to get back to setup..\n"));
 	ShellPromptForResponse(ShellPromptResponseTypeAnyKeyContinue, nullptr, nullptr);
