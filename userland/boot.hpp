@@ -14,6 +14,7 @@ extern "C" {
 
 }
 
+#include "bare.hpp"
 #include <optional>
 
 #define bootUToC16(uStr) reinterpret_cast<const CHAR16*>(uStr)
@@ -187,6 +188,67 @@ public:
 
 	void setMode(UINT32 modeNumber) const {
 		bootEfiAssert(m_graphicsOutputProtocol->SetMode(m_graphicsOutputProtocol, modeNumber));
+	}
+
+	// drawFramebuffer is optional, pass a buffer to enable double buffering
+	// Note that a too small non-zero drawFramebuffer may not be compatible with any video mode.
+	// A framebuffer of at least 16MiB is recommended to support Full HD with plenty of margin
+	bare::GraphicsOutput toBareGraphics(UINTN drawFramebufferSize, void *drawFramebuffer) {
+		UINTN notFittingCount = 0;
+		struct Best {
+			UINT32 modeNumber;
+			EFI_GRAPHICS_OUTPUT_MODE_INFORMATION modeInfo;
+		};
+
+		std::optional<Best> best;
+		iterateModes([&best, drawFramebufferSize, &notFittingCount](UINT32 modeNumber, const EFI_GRAPHICS_OUTPUT_MODE_INFORMATION &modeInfo) {
+			/*Print(bootUToC16(u"Mode #%u: width = %u, height = %u, format = 0x%x, pixelsPerScanline = %u, rMask = %x, gMask = %x, bMask = %u\n"), modeNumber,
+				modeInfo.HorizontalResolution, modeInfo.VerticalResolution, modeInfo.PixelFormat, modeInfo.PixelsPerScanLine,
+				modeInfo.PixelInformation.RedMask, modeInfo.PixelInformation.GreenMask, modeInfo.PixelInformation.BlueMask
+			);*/
+			if (!(modeInfo.PixelFormat == PixelRedGreenBlueReserved8BitPerColor || modeInfo.PixelFormat == PixelBlueGreenRedReserved8BitPerColor))
+				return;
+			if (modeInfo.VerticalResolution * modeInfo.PixelsPerScanLine * bare::GraphicsOutput::pixelStride > drawFramebufferSize) {
+				notFittingCount++;
+				return;
+			}
+
+			if (!best || modeInfo.HorizontalResolution * modeInfo.VerticalResolution > best->modeInfo.HorizontalResolution * best->modeInfo.VerticalResolution) {
+				best = Best {
+					.modeNumber = modeNumber,
+					.modeInfo = modeInfo
+				};
+			}
+		});
+		if (!best)
+			boot::fatalError(bootUToC16(u"boot::GraphicsOutputProtocol::toBareGraphics: no compatible mode found (code is the number of modes not fitting in supplied framebuffer)"), notFittingCount);
+
+		setMode(best->modeNumber);
+		return bare::GraphicsOutput(*m_graphicsOutputProtocol->Mode->Info, reinterpret_cast<void*>(m_graphicsOutputProtocol->Mode->FrameBufferBase), drawFramebuffer);
+	}
+
+	static GraphicsOutputProtocol query(void) {
+		EFI_GRAPHICS_OUTPUT_PROTOCOL *graphicsOutputProtocolPtr = nullptr;
+
+		{
+			boot::printGuid(gEfiGraphicsOutputProtocolGuid);
+			boot::iterateHandles(ByProtocol, &gEfiGraphicsOutputProtocolGuid, nullptr, [&graphicsOutputProtocolPtr](EFI_HANDLE handle) {
+				//Print(bootUToC16(u"gEfiGraphicsOutputProtocolGuid handle %p\n"), handle);
+				bootEfiAssert(
+						gBS->OpenProtocol(
+						handle, &gEfiGraphicsOutputProtocolGuid, reinterpret_cast<void**>(&graphicsOutputProtocolPtr),
+						gImageHandle, 0, EFI_OPEN_PROTOCOL_GET_PROTOCOL
+					)
+				);
+				return true;
+			});
+			if (graphicsOutputProtocolPtr == nullptr)
+				boot::fatalError(bootUToC16(u"gEfiGraphicsOutputProtocolGuid is not supported"), EFI_UNSUPPORTED);
+		}
+
+		//Print(bootUToC16(u"Graphics output protocol = %p\n"), graphicsOutputProtocolPtr);
+
+		return GraphicsOutputProtocol(graphicsOutputProtocolPtr);
 	}
 };
 
